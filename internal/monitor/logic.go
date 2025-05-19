@@ -5,37 +5,81 @@ import (
     "time"
     "TAOSubnetAlert/internal/taoapp"
     "TAOSubnetAlert/internal/twitter"
+    "TAOSubnetAlert/internal/discord"
 )
 
-func MonitorSubnetPrice(netuid int, apiKey string, threshold float64, intervalMinutes int, client *twitter.Client) {
-    lastPrice, err := taoapp.FetchSubnetPrice(netuid, apiKey)
+func MonitorSubnetsWithDiscord(netuids []int, apiKey string, threshold float64, intervalMinutes int, client *discord.Client) {
+    lastPrices, err := taoapp.FetchSubnetsPrices(netuids, apiKey)
     if err != nil {
-        log.Fatalf("Erreur prix initial subnet %d : %v", netuid, err)
+        log.Fatalf("Erreur initiale de récupération des prix: %v", err)
     }
-    log.Printf("Prix initial subnet %d : %.4f $TAO", netuid, lastPrice)
+    
+    for netuid, price := range lastPrices {
+        log.Printf("Prix initial subnet %d: %.4f $TAO", netuid, price)
+    }
 
     ticker := time.NewTicker(time.Duration(intervalMinutes) * time.Minute)
     defer ticker.Stop()
 
     for {
         <-ticker.C
-
-        currentPrice, err := taoapp.FetchSubnetPrice(netuid, apiKey)
+        currentPrices, err := taoapp.FetchSubnetsPrices(netuids, apiKey)
         if err != nil {
-            log.Printf("Erreur récupération prix : %v", err)
+            log.Printf("Erreur de récupération des prix: %v", err)
             continue
         }
+        for netuid, currentPrice := range currentPrices {
+            lastPrice := lastPrices[netuid]
+            variation := ((currentPrice - lastPrice) / lastPrice) * 100
 
-        variation := ((currentPrice - lastPrice) / lastPrice) * 100
+            if variation >= threshold {
+                discord.SendAlert(netuid, currentPrice, variation, true, client)
+                lastPrices[netuid] = currentPrice
+            } else if variation <= -threshold {
+                discord.SendAlert(netuid, currentPrice, -variation, false, client)
+                lastPrices[netuid] = currentPrice
+            } else {
+                log.Printf("Subnet %d - Variation: %.2f%% (seuil %.2f%%)", 
+                    netuid, variation, threshold)
+            }
+        }
+    }
+}
 
-        if variation >= threshold {
-            twitter.TweetAlert(netuid, currentPrice, variation, true, client)
-            lastPrice = currentPrice
-        } else if variation <= -threshold {
-            twitter.TweetAlert(netuid, currentPrice, -variation, false, client)
-            lastPrice = currentPrice
-        } else {
-            log.Printf("Pas de variation suffisante : %.2f%% (seuil %.2f%%)", variation, threshold)
+func MonitorSubnetsWithTwitter(netuids []int, apiKey string, threshold float64, intervalMinutes int, client *twitter.Client) {
+    lastPrices, err := taoapp.FetchSubnetsPrices(netuids, apiKey)
+    if err != nil {
+        log.Fatalf("Erreur initiale de récupération des prix: %v", err)
+    }
+    
+    for netuid, price := range lastPrices {
+        log.Printf("Prix initial subnet %d: %.4f $TAO", netuid, price)
+    }
+
+    ticker := time.NewTicker(time.Duration(intervalMinutes) * time.Minute)
+    defer ticker.Stop()
+
+    for {
+        <-ticker.C
+        currentPrices, err := taoapp.FetchSubnetsPrices(netuids, apiKey)
+        if err != nil {
+            log.Printf("Erreur de récupération des prix: %v", err)
+            continue
+        }
+        for netuid, currentPrice := range currentPrices {
+            lastPrice := lastPrices[netuid]
+            variation := ((currentPrice - lastPrice) / lastPrice) * 100
+
+            if variation >= threshold {
+                twitter.TweetAlert(netuid, currentPrice, variation, true, client)
+                lastPrices[netuid] = currentPrice
+            } else if variation <= -threshold {
+                twitter.TweetAlert(netuid, currentPrice, -variation, false, client)
+                lastPrices[netuid] = currentPrice
+            } else {
+                log.Printf("Subnet %d - Variation: %.2f%% (seuil %.2f%%)", 
+                    netuid, variation, threshold)
+            }
         }
     }
 }
